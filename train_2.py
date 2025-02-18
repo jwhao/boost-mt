@@ -22,9 +22,9 @@ import random
 import argparse
 
 parser = argparse.ArgumentParser()
-parser.add_argument('--image_size', default=84, type=int, choices=[84, 224], help='input image size, 84 for miniImagenet and tieredImagenet, 224 for cub')
-parser.add_argument('--dataset', default='mini_imagenet', choices=['mini_imagenet','tiered_imagenet','cub','FC100','dog','car'])
-parser.add_argument('--data_path', default='/home/jiangweihao/data/mini-imagenet',type=str, help='dataset path')
+parser.add_argument('--image_size', default=84, type=int, choices=[32, 84, 224], help='input image size, 84 for miniImagenet and tieredImagenet, 224 for cub')
+parser.add_argument('--dataset', default='mini_imagenet', choices=['mini_imagenet','tiered_imagenet','cub','FC100','dog','car','fs'])
+parser.add_argument('--data_path', default='/home/jiangweihao/data/mini-imagenet(old)',type=str, help='dataset path')
 
 parser.add_argument('--train_n_episode', default=10, type=int, help='number of episodes in meta train')
 parser.add_argument('--val_n_episode', default=300, type=int, help='number of episodes in meta val')
@@ -48,7 +48,7 @@ params = parser.parse_args()
 
 # 设置日志记录路径
 log_path = os.path.dirname(os.path.abspath(__file__))
-log_path = os.path.join(log_path,'save/{}_tp{}_ns{}_resnet12_512_svrg_freq{}_bs{}_lr{}_new-svrg'. \
+log_path = os.path.join(log_path,'save/{}_tp{}_ns{}_resnet12_512_svrg_freq{}_bs{}_lr{}_new-svrg_20240116'. \
                  format(params.dataset,params.train_n_episode,params.n_shot,params.freq,params.batch_size,params.lr))
 ensure_path(log_path)
 set_log_path(log_path)
@@ -76,7 +76,7 @@ if params.dataset == 'mini_imagenet':
     # val_file = 'val'
     val_file = 'test'
     params.num_classes = 64
-    params.data_path = '/home/jiangweihao/data/mini-imagenet'
+    params.data_path = '/home/jiangweihao/data/mini-imagenet(old)'
 elif params.dataset == 'cub':
     base_file = 'base.json'
     val_file = 'val.json'
@@ -93,6 +93,11 @@ elif params.dataset == 'FC100':
     val_file = 'val'
     params.num_classes = 60
     params.data_path = '/home/jiangweihao/data/FC100'
+elif params.dataset == 'fs':
+    base_file = 'train'
+    val_file = 'val'
+    params.num_classes = 64
+    params.data_path = '/home/jiangweihao/data/cifar100'
 elif params.dataset == 'dog':
     val_file = 'StanfordDog_Images'
     params.data_path = '/home/jiangweihao/data'
@@ -118,29 +123,22 @@ val_datamgr = SetDataManager(params.data_path, params.image_size, n_query=params
 val_loader = val_datamgr.get_data_loader(val_file, aug=False)
 
 #   ------查看导入的数据----------
-# target, label = next(iter(base_loader))
-# print(len(base_loader))
-# print(target.size())          # batch_size=128 ==> torch.Size([128, 3, 84, 84])    
-# print(label.size())           # torch.Size([128])
-# print('--------------------')
-# target1, label1 = next(iter(train_loader))
-# print(len(train_loader))      # train_n_episode=10  ==>  len=10
-# print(target1.size())         # torch.Size([5, 20, 3, 84, 84])
-# print(label1.size())          # torch.Size([5, 20])
-# print('--------------------')
-# target2, label2 = next(iter(val_loader))
-# print(len(val_loader))
-# print(target2.size())
-# print(label2.size())
+
 
 # ----------- 导入模型 -------------------------
 model = resnet12(use_fc= False, num_classes= params.num_classes, use_pooling = True)
+# ckp = '/home/jiangweihao/code/svrg_fsl/save/mini_imagenet_tp10_ns5_resnet12_512_svrg_freq11_bs128_lr0.1_external_updata/best_model.pth'
+# load_state = torch.load(ckp)
+
 model.cuda()
 del model.fc                         # 删除最后的全连接层
+
+# model.load_state_dict(load_state['embedding'],strict=True)
 # from torchinfo import summary
 # summary(model,[5,3,84,84])
 # classifier = nn.Linear(640, 64)
 classifier = nn.Linear(512, params.num_classes)
+# classifier.load_state_dict(load_state['head'],strict=True)
 classifier.cuda()
 # model = DataParallel(model, device_ids=[0, 1])
 # classifier = DataParallel(classifier, device_ids=[0, 1])
@@ -154,6 +152,7 @@ classifier.cuda()
 loss_fn = torch.nn.CrossEntropyLoss()
 # loss_fn.cuda()
 alpha = 1e-1
+# alpha = 1e-2
 freq = 100 #how often to recompute large gradient
             #The optimizer will not update model parameters on iterations
             #where the large batches are calculated
@@ -164,13 +163,13 @@ optimizer = SVRG(model.parameters(), lr = params.lr, freq = params.freq)   # 优
 
 optimizer1 = torch.optim.SGD(classifier.parameters(), lr = alpha, momentum=params.momentum, weight_decay=params.weight_decay)                
 # optimizer2 = torch.optim.SGD(classifier2.parameters(), lr = alpha)
-schedule = torch.optim.lr_scheduler.MultiStepLR(optimizer,milestones=[90],gamma=0.1)     #[30,60]
+schedule = torch.optim.lr_scheduler.MultiStepLR(optimizer,milestones=[90],gamma=0.1)     #[30,60]   [90]
 # 指数衰减学习率，衰减率为 gamma=0.9
 # schedule = torch.optim.lr_scheduler.ExponentialLR(optimizer, gamma=0.9, last_epoch=-1)
 # 周期为50epoch，lr最小值为0（默认）
 # schedule = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, eta_min=0, T_max=25, last_epoch=-1)
 
-schedule1 = torch.optim.lr_scheduler.MultiStepLR(optimizer1,milestones=[30,60],gamma=0.1)
+schedule1 = torch.optim.lr_scheduler.MultiStepLR(optimizer1,milestones=[30,60],gamma=0.1)    #[30,60] 
 
 epochs = 100
 iterations = int (epochs * len(base_loader))               
@@ -198,6 +197,8 @@ for epoch in range(epochs):
 
     model.train()
     out_avg_loss = []
+    # out_acc = []
+
     timer = Timer()
     for idx,(temp,yt) in enumerate(base_loader):
         temp = temp.cuda()
@@ -212,7 +213,10 @@ for epoch in range(epochs):
         optimizer.step()
         optimizer1.step()
         out_avg_loss.append(loss.item())
-        
+
+        # pred_x = y_pred.data.max(1)[1]
+        # outacc = pred_x.eq(yt).sum()
+        # out_acc.append(outacc.item())
         
         #update models using mini batch gradients
               
@@ -250,10 +254,14 @@ for epoch in range(epochs):
         # total = len(train_loader)*params.train_n_way*params.n_query
         # log('第 {} 轮循环, loss:{:.4f}, acc:{:.4f} , consume time: {:.4f}'.format(idx, \
         #     avg_loss/len(train_loader),(total_correct/total),timer.t()))
+        # if idx > 120:
+        #     break
 
     out_avg_loss = np.mean(out_avg_loss)
+    # out_acc = np.mean(out_acc)
     
     log('train epoch:%d , loss:%.3f'%(epoch,out_avg_loss))
+    # log('train epoch:%d , class acc:%.3f'%(epoch,out_acc))
     log('train epoch time: {}'.format(timer.t()))
     schedule.step()
     schedule1.step()
@@ -287,18 +295,16 @@ for epoch in range(epochs):
 
         loss = loss_fn(y_pred,y)
         val_loss_avg += loss.item()
-        
+
         pred = y_pred.data.max(1)[1]
         total_correct += pred.eq(y).sum()
         acc = pred.eq(y).sum().item()
         val_accuracies.append(acc)
-
-    val_loss_avg /= len(val_loader)
-    val_acc_avg = float(total_correct) / total * 100
-    log('epoch: {} val loss: {:.4f}  val acc: {:.4f}'.format(epoch,val_loss_avg,val_acc_avg))
+        
+         
     # print(val_acc_avg)
-    
-    # val_acc_avg = np.mean(np.array(val_accuracies))
+    val_loss_avg /= len(val_loader)
+    val_acc_avg = np.mean(np.array(val_accuracies))
     val_acc_ci95 = 1.96 * np.std(np.array(val_accuracies)) / np.sqrt(params.val_n_episode)
 
     # val_loss_avg = np.mean(np.array(val_losses))
